@@ -6,6 +6,7 @@ ERROR_LOG="errors.txt"
 MAX_PARALLEL=5  # Maximum number of parallel processes
 MAX_RETRIES=3   # Maximum number of retry attempts
 RETRY_DELAY=2   # Delay between retries in seconds
+TIMEOUT=30      # Maximum time in seconds to wait for a process before terminating it
 
 # Create data directory if it doesn't exist
 mkdir -p "$DATA_DIR"
@@ -13,6 +14,42 @@ mkdir -p "$DATA_DIR"
 # Initialize error log
 [ -f "$ERROR_LOG" ] && echo "" >> "$ERROR_LOG" || touch "$ERROR_LOG"
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting parallel Pokemon data fetch" >> "$ERROR_LOG"
+
+# Array to store background process IDs and status
+declare -a pids
+declare -A status
+declare -i completed=0
+
+# Function to clean up processes
+cleanup() {
+    echo "\nReceived termination signal. Cleaning up..." >&2
+    
+    # Log information about running processes
+    for pid in "${pids[@]}"; do
+        if ps -p "$pid" > /dev/null 2>&1; then
+            echo "Process for ${status[$pid]} (PID: $pid) is still running" >&2
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Process for ${status[$pid]} (PID: $pid) was running during cleanup" >> "$ERROR_LOG"
+        fi
+    done
+    
+    echo "Cleanup complete. Exiting." >&2
+    exit 1
+}
+
+# Function to handle a process that exceeds timeout
+handle_timeout() {
+    local pid=$1
+    local pokemon=${status[$pid]}
+    
+    echo "Process for $pokemon (PID: $pid) exceeded timeout of $TIMEOUT seconds" >&2
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: Process for $pokemon (PID: $pid) exceeded timeout" >> "$ERROR_LOG"
+    
+    # Mark the process as timed out
+    status[$pid]="${status[$pid]}_TIMEOUT"
+}
+
+# Set up trap for script termination
+trap cleanup SIGINT SIGTERM
 
 # List of Pokemon to fetch
 POKEMON=("bulbasaur" "ivysaur" "venusaur" "charmander" "charmeleon")
@@ -60,10 +97,7 @@ show_progress() {
     printf "\rProgress: [%s] %d%%" "$bar" "$percent"
 }
 
-# Array to store background process IDs and status
-declare -a pids
-declare -A status
-declare -i completed=0
+# Initialize counters
 declare -i total=${#POKEMON[@]}
 
 echo "Starting parallel fetch for ${total} Pokemon with max ${MAX_PARALLEL} concurrent processes"
@@ -87,7 +121,33 @@ done
 
 # Wait for all background processes to complete and track progress
 for pid in "${pids[@]}"; do
-    if wait "$pid"; then
+    # Wait for process to complete with timeout monitoring
+    wait_start=$(date +%s)
+    process_completed=false
+    
+    while ! $process_completed; do
+        # Check if process has completed
+        if ! ps -p "$pid" > /dev/null 2>&1; then
+            process_completed=true
+            continue
+        fi
+        
+        # Check for timeout
+        current_time=$(date +%s)
+        elapsed=$((current_time - wait_start))
+        
+        if [ $elapsed -gt $TIMEOUT ]; then
+            handle_timeout "$pid"
+            process_completed=true
+            continue
+        fi
+        
+        # Brief pause before checking again
+        sleep 1
+    done
+    
+    # Check if process completed successfully
+    if [ -f "$DATA_DIR/${status[$pid]}.json" ]; then
         echo "✅ ${status[$pid]} completed successfully"
     else
         echo "❌ ${status[$pid]} failed"
