@@ -1,0 +1,115 @@
+#!/bin/bash
+
+# Define constants
+DATA_DIR="pokemon_data"
+ERROR_LOG="errors.txt"
+MAX_PARALLEL=5  # Maximum number of parallel processes
+MAX_RETRIES=3   # Maximum number of retry attempts
+RETRY_DELAY=2   # Delay between retries in seconds
+
+# Create data directory if it doesn't exist
+mkdir -p "$DATA_DIR"
+
+# Initialize error log
+[ -f "$ERROR_LOG" ] && echo "" >> "$ERROR_LOG" || touch "$ERROR_LOG"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting parallel Pokemon data fetch" >> "$ERROR_LOG"
+
+# List of Pokemon to fetch
+POKEMON=("bulbasaur" "ivysaur" "venusaur" "charmander" "charmeleon")
+
+# Function to fetch Pokemon data with retry logic
+fetch_pokemon() {
+    local pokemon=$1
+    local output_file="$DATA_DIR/${pokemon}.json"
+    local start_time=$(date +%s)
+    
+    echo "Fetching data for $pokemon..."
+    
+    # Make API request with retry logic
+     for attempt in $(seq 1 $MAX_RETRIES); do
+         if curl -s -f "https://pokeapi.co/api/v2/pokemon/$pokemon" -o "$output_file"; then
+             local end_time=$(date +%s)
+             local duration=$((end_time - start_time))
+             echo "Saved data to $output_file ✅ (${duration}s)"
+             return 0
+         else
+             echo "Attempt $attempt failed for $pokemon"
+             [ $attempt -lt $MAX_RETRIES ] && sleep $RETRY_DELAY
+         fi
+     done
+     
+     # Log error if all retries fail
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Failed to fetch data for $pokemon after $MAX_RETRIES attempts" >> "$ERROR_LOG"
+    return 1
+}
+
+# Function to display a simple progress bar
+show_progress() {
+    local completed=$1
+    local total=$2
+    local percent=$((completed * 100 / total))
+    local bar_length=50
+    local filled_length=$((percent * bar_length / 100))
+    
+    # Create the progress bar
+    local bar=""
+    for ((i=0; i<filled_length; i++)); do bar+="="; done
+    for ((i=filled_length; i<bar_length; i++)); do bar+=" "; done
+    
+    # Print the progress bar
+    printf "\rProgress: [%s] %d%%" "$bar" "$percent"
+}
+
+# Array to store background process IDs and status
+declare -a pids
+declare -A status
+declare -i completed=0
+declare -i total=${#POKEMON[@]}
+
+echo "Starting parallel fetch for ${total} Pokemon with max ${MAX_PARALLEL} concurrent processes"
+
+# Start fetching data for each Pokemon in parallel with controlled concurrency
+for pokemon in "${POKEMON[@]}"; do
+    # Wait if we've reached the maximum number of parallel processes
+    while [ $(jobs -r | wc -l) -ge $MAX_PARALLEL ]; do
+        sleep 0.5
+    done
+    
+    # Start the fetch in background
+    fetch_pokemon "$pokemon" &
+    pid=$!
+    pids+=("$pid")
+    status["$pid"]="$pokemon"
+    
+    # Show progress
+    show_progress $completed $total
+done
+
+# Wait for all background processes to complete and track progress
+for pid in "${pids[@]}"; do
+    if wait "$pid"; then
+        echo "✅ ${status[$pid]} completed successfully"
+    else
+        echo "❌ ${status[$pid]} failed"
+    fi
+    
+    ((completed++))
+    show_progress $completed $total
+done
+
+# Print final newline after progress bar
+echo ""
+
+# Generate summary report
+successful=$(find "$DATA_DIR" -name "*.json" -type f | wc -l)
+failed=$((total - successful))
+
+echo "\nParallel fetch complete!"
+echo "-------------------"
+echo "Total Pokemon: $total"
+echo "Successfully fetched: $successful"
+echo "Failed: $failed"
+
+if [ $failed -gt 0 ]; then
+     echo "\nCheck $ERROR_LOG for details on failed requests."
+ fi

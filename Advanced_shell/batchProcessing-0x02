@@ -1,0 +1,41 @@
+#!/bin/bash
+
+# Create pokemon_data directory if it doesn't exist
+mkdir -p pokemon_data
+
+# List of Pokemon to fetch
+POKEMON=("bulbasaur" "ivysaur" "venusaur" "charmander" "charmeleon")
+
+# Function to fetch Pokemon data with retry logic
+fetch_pokemon() {
+    local pokemon=$1
+    echo "Fetching data for $pokemon..."
+    
+    # Implement retry mechanism (up to 3 attempts)
+    for attempt in {1..3}; do
+        # Add delay between requests to handle rate limiting
+        if [ $attempt -gt 1 ]; then
+            echo "Retry attempt $attempt for $pokemon"
+            sleep 2
+        else
+            sleep 1
+        fi
+        
+        # Make API request
+        if curl -s "https://pokeapi.co/api/v2/pokemon/$pokemon" -o "pokemon_data/${pokemon}.json"; then
+            echo "Saved data to pokemon_data/${pokemon}.json ✅"
+            return 0
+        else
+            echo "Attempt $attempt failed for $pokemon"
+        fi
+    done
+    
+    # If all retries fail, log the error and continue
+    echo "Error: Failed to fetch data for $pokemon after 3 attempts" >> errors.txt
+    return 1
+}
+
+# Loop through Pokemon list
+for pokemon in "${POKEMON[@]}"; do
+    fetch_pokemon "$pokemon"
+done
