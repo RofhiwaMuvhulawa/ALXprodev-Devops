@@ -1,9 +1,0 @@
-#!/bin/bash
-
-# Extract required fields using jq and format with awk
-jq -r '[.name, (.types[0].type.name), .weight, .height] | @csv' data.json | \
-awk -F',' '{ printf "%s is of type %s, weighs %.1fkg, and is %.1fm tall.\n", \
-toupper(substr($1,1,1))substr($1,2), \
-$2, \
-$3/10, \
-$4/10 }'
